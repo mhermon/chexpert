@@ -24,11 +24,11 @@ class CheXpertDataset(Dataset):
                     if y[i,j] == -1:
                         y[i,j] = random.uniform(0, .3)
         elif smooth == "smart":
-            y[:, 1][y[:, 1] == -1] = 1
-            y[:, 3][y[:, 3] == -1] = 1
-            y[:, 0][y[:, 0] == -1] = 0
-            y[:, 2][y[:, 2] == -1] = 0
-            y[:, 4][y[:, 4] == -1] = 0
+            y[:, 1][y[:, 1] == -1] = 1 # Edema
+            y[:, 3][y[:, 3] == -1] = 1 # Atelactasis
+            y[:, 0][y[:, 0] == -1] = 0 # Cardiomegaly
+            y[:, 2][y[:, 2] == -1] = 0 # Consolidation
+            y[:, 4][y[:, 4] == -1] = 0 # Pleural Effusion
         else:
             raise Exception('Please provide a valid smoothing technique')
             

@@ -33,6 +33,7 @@ parser.add_argument('--weight_decay', type=float, default=1e-5)
 parser.add_argument('--margin', type=float, default=1.0)
 parser.add_argument('--decay_factor', type=int, default=10)
 parser.add_argument('--class_id', type=int, default=-1)
+parser.add_argument('--model_name', required=True)
 parser.add_argument('--label_smoothing',
                     default='ones',
                     const='ones',
@@ -51,6 +52,7 @@ weight_decay = p.weight_decay
 margin = p.margin
 decay_factor = p.decay_factor
 class_id = p.class_id
+model_name = p.model_name
 
 def set_all_seeds(SEED):
     # REPRODUCIBILITY
@@ -83,142 +85,144 @@ num_classes = train_labels.shape[1]
 if class_id != -1:
     num_classes = 1
 
-writer = SummaryWriter('./runs/aucm_multi_label_pretrained_model')
+writer = SummaryWriter('./runs/class_1')
 
 
-# model
-model = MultiLabelClassification(num_feature=num_features, num_class=num_classes)
-model = model.cuda()
-imratio = train_set.imratio
-# define loss & optimizer
-Loss = AUCMLoss(imratio=imratio)
-optimizer = PESG(model, 
-                 a=Loss.a, 
-                 b=Loss.b, 
-                 alpha=Loss.alpha,
-                 lr=lr, 
-                 gamma=gamma, 
-                 margin=margin, 
-                 weight_decay=weight_decay)
+# Single class model
+if num_classes == 1:
+    # model
+    model = MultiLabelClassification(num_feature=num_features, num_class=num_classes)
+    model = model.cuda()
+    imratio = train_set.imratio
+    # define loss & optimizer
+    Loss = AUCMLoss(imratio=imratio)
+    optimizer = PESG(model, 
+                     a=Loss.a, 
+                     b=Loss.b, 
+                     alpha=Loss.alpha,
+                     lr=lr, 
+                     gamma=gamma, 
+                     margin=margin, 
+                     weight_decay=weight_decay)
 
-best_val_auc = 0
-step = 0
-for epoch in range(epochs):
-    if epoch > 0:
-         optimizer.update_regularizer(decay_factor=decay_factor)
-    for idx, data in enumerate(train_loader):
-        train_data, train_labels = data
-        train_data, train_labels = train_data.cuda(), train_labels.cuda()
-        y_pred = model(train_data)
-        loss = Loss(y_pred, train_labels)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        if step % 200 == 0:
-            writer.add_scalar("Loss/train", loss, step + 1)
-        
-        # validation
-        if idx % 400 == 0:
-            model.eval()
-            with torch.no_grad():    
-                test_pred = []
-                test_true = [] 
-                for jdx, data in enumerate(val_loader):
-                    test_data, test_label = data
-                    test_data = test_data.cuda()
-                    y_pred = model(test_data)
-                    test_pred.append(y_pred.cpu().detach().numpy())
-                    test_true.append(test_label.numpy())
+    best_val_auc = 0
+    step = 0
+    for epoch in range(epochs):
+        if epoch > 0:
+             optimizer.update_regularizer(decay_factor=decay_factor)
+        for idx, data in enumerate(train_loader):
+            train_data, train_labels = data
+            train_data, train_labels = train_data.cuda(), train_labels.cuda()
+            y_pred = model(train_data)
+            loss = Loss(y_pred, train_labels)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            if step % 200 == 0:
+                writer.add_scalar("Loss/train", loss, step + 1)
 
-                test_true = np.concatenate(test_true)
-                test_pred = np.concatenate(test_pred)
-                val_auc =  roc_auc_score(test_true, test_pred) 
-                writer.add_scalar("Validation AUC", val_auc, step + 1)
-                model.train()
+            # validation
+            if idx % 400 == 0:
+                model.eval()
+                with torch.no_grad():    
+                    test_pred = []
+                    test_true = [] 
+                    for jdx, data in enumerate(val_loader):
+                        test_data, test_label = data
+                        test_data = test_data.cuda()
+                        y_pred = model(test_data)
+                        test_pred.append(y_pred.cpu().detach().numpy())
+                        test_true.append(test_label.numpy())
 
-                if best_val_auc < val_auc:
-                    print('Saved model to /models/trained_model_c0.pth')
-                    np.save('./mid_training_predictions', test_pred)
-                    torch.save(model.state_dict(), './models/trained_model.pth')
-                    best_val_auc = val_auc
+                    test_true = np.concatenate(test_true)
+                    test_pred = np.concatenate(test_pred)
+                    val_auc =  roc_auc_score(test_true, test_pred) 
+                    writer.add_scalar("Validation AUC", val_auc, step + 1)
+                    model.train()
 
-            print('Epoch=%s, BatchID=%s, Val_AUC=%.4f, lr=%.4f'%(epoch, idx, val_auc,  optimizer.lr))
-            writer.flush()
-            
-        step = step + 1
+                    if best_val_auc < val_auc:
+                        print(f'Saved model to {model_name}')
+                        torch.save(model.state_dict(), f'./models/{model_name}.pth')
+                        best_val_auc = val_auc
 
-writer.flush()
-print ('Best Val_AUC is %.4f'%best_val_auc)
+                print('Epoch=%s, BatchID=%s, Val_AUC=%.4f, lr=%.4f'%(epoch, idx, val_auc,  optimizer.lr))
+                writer.flush()
+
+            step = step + 1
+
+    writer.flush()
+    print ('Best Val_AUC is %.4f'%best_val_auc)
+
+else:
+    # Multi-Class 
+    # model
+    imratio = train_set.imratio_list
+
+    model = MultiLabelClassification(num_feature=num_features, num_class=num_classes)
+    model = model.cuda()
+
+    # define loss & optimizer
+    Loss = AUCM_MultiLabel(imratio=imratio, num_classes=5)
+    optimizer = PESG(model, 
+                     a=Loss.a, 
+                     b=Loss.b, 
+                     alpha=Loss.alpha, 
+                     lr=lr, 
+                     gamma=gamma, 
+                     margin=margin, 
+                     weight_decay=weight_decay, device='cuda')
 
 
-'''
-# model
-imratio = train_set.imratio_list
+    # training
+    best_val_auc = 0 
+    step = 0
+    for epoch in range(5):
+        if epoch > 0:
+            optimizer.update_regularizer(decay_factor=10)       
+        for idx, data in enumerate(train_loader):
+            train_data, train_labels = data
+            train_data, train_labels  = train_data.cuda(), train_labels.cuda()
+            y_pred = model(train_data)
+            y_pred = torch.sigmoid(y_pred)
+            loss = Loss(y_pred, train_labels)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-model = MultiLabelClassification(num_feature=num_features, num_class=num_classes)
-model = model.cuda()
+            if step % 200 == 0:
+                writer.add_scalar("Loss/train", loss, step + 1)
 
-# define loss & optimizer
-Loss = AUCM_MultiLabel(imratio=imratio, num_classes=5)
-optimizer = PESG(model, 
-                 a=Loss.a, 
-                 b=Loss.b, 
-                 alpha=Loss.alpha, 
-                 lr=lr, 
-                 gamma=gamma, 
-                 margin=margin, 
-                 weight_decay=weight_decay, device='cuda')
+            # validation  
+            if idx % 400 == 0:
+                model.eval()
+                with torch.no_grad():    
+                    test_pred = []
+                    test_true = [] 
+                    for jdx, data in enumerate(val_loader):
+                        test_data, test_labels = data
+                        test_data = test_data.cuda()
+                        y_pred = model(test_data)
+                        test_pred.append(y_pred.cpu().detach().numpy())
+                        test_true.append(test_labels.numpy())
 
+                    test_true = np.concatenate(test_true)
+                    test_pred = np.concatenate(test_pred)
+                    val_auc_mean =  roc_auc_score(test_true, test_pred) 
+                    writer.add_scalar("Validation AUC", val_auc_mean, step + 1)
+                    model.train()
 
-# training
-best_val_auc = 0 
-step = 0
-for epoch in range(5):
-    if epoch > 0:
-        optimizer.update_regularizer(decay_factor=10)       
-    for idx, data in enumerate(train_loader):
-        train_data, train_labels = data
-        train_data, train_labels  = train_data.cuda(), train_labels.cuda()
-        y_pred = model(train_data)
-        y_pred = torch.sigmoid(y_pred)
-        loss = Loss(y_pred, train_labels)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        
-        if step % 200 == 0:
-            writer.add_scalar("Loss/train", loss, step + 1)
+                    if best_val_auc < val_auc_mean:
+                        best_val_auc = val_auc_mean
+                        print(f'Saved model to {model_name}')
+                        torch.save(model.state_dict(), f'./models/{model_name}.pth')
 
-        # validation  
-        if idx % 400 == 0:
-            model.eval()
-            with torch.no_grad():    
-                test_pred = []
-                test_true = [] 
-                for jdx, data in enumerate(val_loader):
-                    test_data, test_labels = data
-                    test_data = test_data.cuda()
-                    y_pred = model(test_data)
-                    test_pred.append(y_pred.cpu().detach().numpy())
-                    test_true.append(test_labels.numpy())
+                print ('Epoch=%s, BatchID=%s, Val_AUC=%.4f, Best_Val_AUC=%.4f'%(epoch, idx, val_auc_mean, best_val_auc))
+                writer.flush()
+            step = step + 1
 
-                test_true = np.concatenate(test_true)
-                test_pred = np.concatenate(test_pred)
-                val_auc_mean =  roc_auc_score(test_true, test_pred) 
-                writer.add_scalar("Validation AUC", val_auc_mean, step + 1)
-                model.train()
+    writer.flush()
+    print('Best Val_AUC is %.4f'%best_val_auc)
 
-                if best_val_auc < val_auc_mean:
-                    best_val_auc = val_auc_mean
-                    torch.save(model.state_dict(), 'aucm_multi_label_pretrained_model.pth')
-
-            print ('Epoch=%s, BatchID=%s, Val_AUC=%.4f, Best_Val_AUC=%.4f'%(epoch, idx, val_auc_mean, best_val_auc))
-            writer.flush()
-        step = step + 1
-
-writer.flush()
-print('Best Val_AUC is %.4f'%best_val_auc)
-'''
 
 
 
